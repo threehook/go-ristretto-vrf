@@ -75,20 +75,20 @@ func expandSecret(sk *[SecretKeySize]byte) (x, skhr *[32]byte) {
 }
 
 func Compute(m []byte, sk *[SecretKeySize]byte) []byte {
+	var ii ristretto.Point
+	var mScalar ristretto.Scalar
+	var iiB, vrf [Size]byte
+
 	x, _ := expandSecret(sk)
 	p := hashToCurve(m)
 
-	var ii ristretto.Point
-	var mScalar ristretto.Scalar
 	mScalar.SetBytes(x)
 	ii.ScalarMult(p, &mScalar)
-
-	var iiB = new([32]byte)
-	ii.BytesInto(iiB)
+	ii.BytesInto(&iiB)
 	hash := sha3.NewShake256()
 	hash.Write(iiB[:]) // const length: Size
 	hash.Write(m)
-	var vrf [Size]byte
+
 	hash.Read(vrf[:])
 	return vrf[:]
 }
@@ -97,16 +97,16 @@ func Compute(m []byte, sk *[SecretKeySize]byte) []byte {
 // The vrf value is the same as returned by Compute(m, sk).
 func Prove(m []byte, sk *[SecretKeySize]byte) (vrf, proof []byte) {
 	x, skhr := expandSecret(sk) // Create hashes
-	var cH, rH [64]byte
+	var cH, rH [SecretKeySize]byte
 	var r, c, minusC, t ristretto.Scalar
 	var ii, gr, hr ristretto.Point
+	var grB, hrB, iiB [Size]byte
 	hm := hashToCurve(m) // Hashed message to Point
 
 	var xScalar ristretto.Scalar
 	xScalar.SetBytes(x)
 	ii.ScalarMult(hm, &xScalar)
-	iiB := new([32]byte)
-	ii.BytesInto(iiB)
+	ii.BytesInto(&iiB)
 
 	hash := sha3.NewShake256()
 	hash.Write(skhr[:])
@@ -118,10 +118,8 @@ func Prove(m []byte, sk *[SecretKeySize]byte) (vrf, proof []byte) {
 
 	gr.ScalarMultBase(&r)
 	hr.ScalarMult(hm, &r)
-	grB := new([32]byte)
-	gr.BytesInto(grB)
-	hrB := new([32]byte)
-	hr.BytesInto(hrB)
+	gr.BytesInto(&grB)
+	hr.BytesInto(&hrB)
 
 	hash.Write(grB[:])
 	hash.Write(hrB[:])
@@ -147,7 +145,7 @@ func Prove(m []byte, sk *[SecretKeySize]byte) (vrf, proof []byte) {
 
 // Verify returns true if vrf=Compute(m, sk) for the sk that corresponds to pk.
 func Verify(pkBytes, m, vrfBytes, proof []byte) bool {
-	var pk, iiB, vrf, ABytes, BBytes [32]byte
+	var pk, iiB, vrf, ABytes, BBytes, hCheck [Size]byte
 	var b, cRef, c, t ristretto.Scalar
 
 	if len(proof) != ProofSize || len(vrfBytes) != Size || len(pkBytes) != PublicKeySize {
@@ -163,14 +161,13 @@ func Verify(pkBytes, m, vrfBytes, proof []byte) bool {
 	hash := sha3.NewShake256()
 	hash.Write(iiB[:]) // const length
 	hash.Write(m)
-	var hCheck [Size]byte
 	hash.Read(hCheck[:])
 	if !bytes.Equal(hCheck[:], vrf[:]) {
 		return false
 	}
 	hash.Reset()
 
-	var P, ii, A, B, X, Y, J, K, R, S, hmtP, iicP ristretto.Point
+	var P, hmtP, iicP, ii, A, B, X, Y, J, K, R, S ristretto.Point
 	if !P.SetBytes(&pk) {
 		return false
 	}
