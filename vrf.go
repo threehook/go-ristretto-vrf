@@ -1,20 +1,6 @@
 // Package vrf implements a verifiable random function using the Ristretto form
 // of Curve25519, SHA3 and the Elligator2 map.
-//
-//     E is Curve25519 (in Ristretto coordinates), h is SHA3.
-//     f is the elligator map (bytes->E) that covers half of E.
-//     8 is the cofactor of E, the group order is 8*l for prime l.
-//     Setup : the prover publicly commits to a public key (P : E)
-//     H : names -> E
-//         H(n) = f(h(n))^8
-//     VRF : keys -> names -> vrfs
-//         VRF_x(n) = h(n, H(n)^x))
-//     Prove : keys -> names -> proofs
-//         Prove_x(n) = tuple(c=h(n, g^r, H(n)^r), t=r-c*x, ii=H(n)^x)
-//             where r = h(x, n) is used as a source of randomness
-//     Check : E -> names -> vrfs -> proofs -> bool
-//         Check(P, n, vrf, (c,t,ii)) = vrf == h(n, ii)
-//                                     && c == h(n, g^t*P^c, H(n)^t*ii^c)
+
 package vrf
 
 import (
