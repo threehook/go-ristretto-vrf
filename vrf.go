@@ -33,11 +33,13 @@ const (
 )
 
 // GenerateKey creates a public/secret key pair.
-func GenerateKey() (pk [PublicKeySize]byte, sk *[SecretKeySize]byte) {
+func GenerateKey() (*[PublicKeySize]byte, *[SecretKeySize]byte) {
 	var secretKey ristretto.Scalar
+	var pk = new([PublicKeySize]byte)
+	var sk = new([SecretKeySize]byte)
 	var digest [64]byte
+
 	secretKey.Rand() // Generate a new secret key
-	sk = new([SecretKeySize]byte)
 	copy(sk[:32], secretKey.Bytes())
 
 	h := sha3.NewShake256()
@@ -56,14 +58,14 @@ func GenerateKey() (pk [PublicKeySize]byte, sk *[SecretKeySize]byte) {
 	hBytesScalar.SetBytes(&hBytes)
 
 	A.ScalarMultBase(&hBytesScalar) // compute public key
-	A.BytesInto(&pk)
+	A.BytesInto(pk)
 
 	copy(sk[32:], pk[:])
-	return
+	return pk, sk
 }
 
-func expandSecret(sk *[SecretKeySize]byte) (x, skhr *[32]byte) {
-	x, skhr = new([32]byte), new([32]byte)
+func expandSecret(sk *[SecretKeySize]byte) (*[32]byte, *[32]byte) {
+	var x, skhr = new([32]byte), new([32]byte)
 	hash := sha3.NewShake256()
 	hash.Write(sk[:32])
 	hash.Read(x[:])
@@ -71,7 +73,7 @@ func expandSecret(sk *[SecretKeySize]byte) (x, skhr *[32]byte) {
 	x[0] &= 248
 	x[31] &= 127
 	x[31] |= 64
-	return
+	return x, skhr
 }
 
 func Compute(m []byte, sk *[SecretKeySize]byte) []byte {
