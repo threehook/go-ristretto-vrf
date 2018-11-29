@@ -83,12 +83,13 @@ func Compute(m []byte, sk *[SecretKeySize]byte) []byte {
 
 // Prove returns the vrf value and a proof such that Verify(pk, m, vrf, proof) == true.
 // The vrf value is the same as returned by Compute(m, sk).
-func Prove(m []byte, sk *[SecretKeySize]byte) (vrf, proof []byte) {
+func Prove(m []byte, sk *[SecretKeySize]byte) ([]byte, []byte) { // Return vrf, proof
 	x, skhr := expandSecret(sk) // Create hashes
 	var cH, rH [SecretKeySize]byte
 	var r, c, minusC, t ristretto.Scalar
 	var ii, gr, hr ristretto.Point
 	var grB, hrB, iiB [Size]byte
+
 	hm := hashToCurve(m) // Hashed message to Point
 
 	var xScalar ristretto.Scalar
@@ -119,16 +120,16 @@ func Prove(m []byte, sk *[SecretKeySize]byte) (vrf, proof []byte) {
 
 	t.MulAdd(&xScalar, &minusC, &r)
 
-	proof = make([]byte, ProofSize)
+	var proof = make([]byte, ProofSize)
 	copy(proof[:32], c.Bytes())
 	copy(proof[32:64], t.Bytes())
 	copy(proof[64:96], iiB[:])
 
 	hash.Write(iiB[:]) // const length: Size
 	hash.Write(m)
-	vrf = make([]byte, Size)
+	var vrf = make([]byte, Size)
 	hash.Read(vrf[:])
-	return
+	return vrf, proof
 }
 
 // Verify returns true if vrf=Compute(m, sk) for the sk that corresponds to pk.
