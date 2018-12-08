@@ -46,10 +46,10 @@ func TestVerify(t *testing.T) {
 	}
 }
 
-func TestUint64ArrayToInt32Array(t *testing.T) {
-	iA := uint64ArrayToInt32Array([]uint64{18446744073709551615, 123456789012344})
-	fmt.Println(iA)
-}
+//func TestUint64ArrayToInt32Array(t *testing.T) {
+//	iA := uint64ArrayToInt32Array([]uint64{18446744073709551615, 123456789012344})
+//	fmt.Println(iA)
+//}
 
 func TestFlipBitForgery(t *testing.T) {
 	pk, sk := GenerateKey()
