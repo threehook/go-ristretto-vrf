@@ -1,6 +1,19 @@
 // Package vrf implements a verifiable random function using the Ristretto form
 // of Curve25519, SHA3 and the Elligator2 map.
-
+//
+//     E is Curve25519 (in Edwards coordinates), h is SHA3.
+//     f is the elligator map (bytes->E) that covers half of E.
+//     8 is the cofactor of E, the group order is 8*l for prime l.
+//     Setup : the prover publicly commits to a public key (P : E)
+//     H : names -> E
+//         H(n) = f(h(n))^8
+//     VRF : keys -> names -> vrfs
+//         VRF_x(n) = h(n, H(n)^x))
+//     Prove : keys -> names -> proofs
+//         Prove_x(n) = tuple(c=h(n, g^r, H(n)^r), t=r-c*x, ii=H(n)^x)
+//             where r = h(x, n) is used as a source of randomness
+//     Check : E -> names -> vrfs -> proofs -> bool
+//         Check(P, n, vrf, (c,t,ii)) = vrf == h(n, ii) && c == h(n, g^t*P^c, H(n)^t*ii^c)
 package vrf
 
 import (
@@ -81,115 +94,126 @@ func Compute(m []byte, sk *[SecretKeySize]byte) []byte {
 	return vrf[:]
 }
 
-// Prove returns the vrf value and a proof such that Verify(pk, m, vrf, proof) == true.
-// The vrf value is the same as returned by Compute(m, sk).
-func Prove(m []byte, sk *[SecretKeySize]byte) ([]byte, []byte) { // Return vrf, proof
-	x, skhr := expandSecret(sk) // Create hashes
+// Prove returns the vrf value and a proof such that Verify(pk, d, vrf, proof) == true.
+// The vrf value is the same as returned by Compute(d, sk).
+//
+// Prove_x(d) = tuple(c=h(d, g^r, H(d)^r), t=r-c*x, ii=H(d)^x) where r = h(x, d) is used as a source of randomness
+// and x = secret key, d = data, c = encrypted composite of data and proof, t = encrypted c plus r and r = randomness
+func Prove(d []byte, sk *[SecretKeySize]byte) ([]byte, []byte) { // Return vrf, proof
+	x, skhr := expandSecret(sk) // Create two separate 32 byte hashes from the secret key 64 byte hash
 	var cH, rH [SecretKeySize]byte
 	var r, c, minusC, t ristretto.Scalar
-	var ii, gr, hr ristretto.Point
+	var ii, gr, hr ristretto.Point // ii = encrypted data, gr and hr = encrypted randomness
 	var grB, hrB, iiB [Size]byte
 
-	hm := hashToCurve(m) // Hashed message to Point
+	dP := hashToCurve(d) // Curve point of data
 
-	var xScalar ristretto.Scalar
-	xScalar.SetBytes(x)
-	ii.ScalarMult(hm, &xScalar)
+	var xSc ristretto.Scalar
+	xSc.SetBytes(x)
+	ii.ScalarMult(dP, &xSc) // ii=H(d)^x) where d = data and x = secret key
 	ii.BytesInto(&iiB)
 
+	// Create randomness
+	// r = h(x, d) is used as a source of randomness where d = data and x = secret key
 	hash := sha3.NewShake256()
 	hash.Write(skhr[:])
-	hash.Write(sk[32:]) // public key
-	hash.Write(m)
+	hash.Write(sk[32:])
+	hash.Write(d)
 	hash.Read(rH[:])
 	hash.Reset()
 	r.SetReduced(&rH)
 
+	// Create curve points from randomness r
 	gr.ScalarMultBase(&r)
-	hr.ScalarMult(hm, &r)
+	hr.ScalarMult(dP, &r)
 	gr.BytesInto(&grB)
 	hr.BytesInto(&hrB)
 
 	hash.Write(grB[:])
 	hash.Write(hrB[:])
-	hash.Write(m)
-	hash.Read(cH[:])
+	hash.Write(d)
+	hash.Read(cH[:]) // Encrypted composite of data, proof and randomness
 	hash.Reset()
 	c.SetReduced(&cH)
-	minusC.Neg(&c)
 
-	t.MulAdd(&xScalar, &minusC, &r)
+	minusC.Neg(&c)
+	t.MulAdd(&xSc, &minusC, &r) // t=r-c*x
 
 	var proof = make([]byte, ProofSize)
 	copy(proof[:32], c.Bytes())
 	copy(proof[32:64], t.Bytes())
 	copy(proof[64:96], iiB[:])
 
-	hash.Write(iiB[:]) // const length: Size
-	hash.Write(m)
+	// VRF_x(d) = h(d, H(d)^x)) where x = secret key and d = data
+	hash.Write(iiB[:])
+	hash.Write(d)
 	var vrf = make([]byte, Size)
 	hash.Read(vrf[:])
 	return vrf, proof
 }
 
-// Verify returns true if vrf=Compute(m, sk) for the sk that corresponds to pk.
-func Verify(pkBytes, m, vrfBytes, proof []byte) bool {
+// Verify returns true if vrf=Compute(data, sk) for the sk that corresponds to pk.
+//
+// Check(P, d, vrf, (c,t,ii)) = vrf == h(d, ii) && c == h(d, g^t*pkP^c, H(d)^t*ii^c)
+func Verify(pkBytes, d, vrfBytes, proof []byte) bool {
 	var pk, iiB, vrf, ABytes, BBytes, hCheck [Size]byte
-	var b, cRef, c, t ristretto.Scalar
+	var scZero, cRef, c, t ristretto.Scalar
 
 	if len(proof) != ProofSize || len(vrfBytes) != Size || len(pkBytes) != PublicKeySize {
 		return false
 	}
+	scZero.SetZero() // Scalar zero
 
 	copy(vrf[:], vrfBytes)
 	copy(pk[:], pkBytes)
-	copy(c[:32], proof[:32])
-	copy(t[:32], proof[32:64])
-	copy(iiB[:], proof[64:96])
+	copy(c[:32], proof[:32])   // Retrieve c = h(d, g^t*P^c, H(d)^t*ii^c) = encrypted composite of data, proof and randomness
+	copy(t[:32], proof[32:64]) // Retrieve t = r-c = encrypted composite of data and proof
+	copy(iiB[:], proof[64:96]) // Retrieve ii = encrypted data
 
 	hash := sha3.NewShake256()
-	hash.Write(iiB[:]) // const length
-	hash.Write(m)
-	hash.Read(hCheck[:])
+	hash.Write(iiB[:])
+	hash.Write(d)
+	hash.Read(hCheck[:]) // hCheck is supposed to be vrf
 	if !bytes.Equal(hCheck[:], vrf[:]) {
 		return false
 	}
 	hash.Reset()
 
-	var P, hmtP, iicP, ii, A, B, X, Y, J, K, R, S ristretto.Point
-	if !P.SetBytes(&pk) {
+	var pZero ristretto.Point
+	var pkP, hmtP, iicP, ii, A, B, X, Y, R, S ristretto.Point
+	// Get curve point of public key, consequently checking if it is on the Curve
+	if !pkP.SetBytes(&pk) {
 		return false
 	}
 
+	// Get curve point of encrypted data, consequently checking if it is on the Curve
 	if !ii.SetBytes(&iiB) {
 		return false
 	}
 
 	X.ScalarMultBase(&t)
-	Y.ScalarMult(&P, &c)
-	A.Add(&X, &Y)
+	Y.ScalarMult(&pkP, &c)
+	A.Add(&X, &Y) // A = encrypted composite of data, proof and randomness
 	A.BytesInto(&ABytes)
 
-	hm := hashToCurve(m)
+	dP := hashToCurve(d) // dP = curve point of data
 
-	b.SetZero()
-	J.ScalarMultBase(&b)
-	K.ScalarMult(hm, &t)
-	hmtP.Add(&J, &K)
+	pZero.ScalarMultBase(&scZero)
+	R.ScalarMult(dP, &t) // R = encrypted composite of data and proof
+	hmtP.Add(&pZero, &R)
 
-	R.ScalarMultBase(&b)
-	S.ScalarMult(&ii, &c)
-	iicP.Add(&R, &S)
+	S.ScalarMult(&ii, &c) // S = ii * h(d, g^t*pkP^c, H(d)^t*ii^c) = encrypted data
+	iicP.Add(&pZero, &S)
 
-	B.Add(&hmtP, &iicP)
+	B.Add(&hmtP, &iicP) // Create a new Point from composite of encrypted data and proof (R) and encrypted data (S)
 	B.BytesInto(&BBytes)
 
 	var cH [64]byte
-	hash.Write(ABytes[:]) // const length
-	hash.Write(BBytes[:]) // const length
-	hash.Write(m)
+	hash.Write(ABytes[:])
+	hash.Write(BBytes[:])
+	hash.Write(d)
 	hash.Read(cH[:])
-	cRef.SetReduced(&cH)
+	cRef.SetReduced(&cH) // cRef must have same hash as encrypted composite of data, proof and randomness
 
 	return cRef.Equals(&c)
 }
