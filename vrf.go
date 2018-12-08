@@ -18,7 +18,6 @@ package vrf
 
 import (
 	"bytes"
-	"encoding/binary"
 	"github.com/bwesterb/go-ristretto"
 	"golang.org/x/crypto/sha3"
 )
@@ -226,25 +225,25 @@ func hashToCurve(m []byte) *ristretto.Point {
 	return &p
 }
 
-func uint64ArrayToInt32Array(uis []uint64) (iA []int32) {
-	iA = []int32{}
-	for _, ui := range uis {
-		i, i2 := uint64ToInt32(ui)
-		iA = append(iA, i, i2)
-	}
-	return
-}
-
-func uint64ToInt32(ui uint64) (i, i2 int32) {
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, uint64(ui))
-	i |= int32(b[0])
-	i |= int32(b[1]) << 8
-	i |= int32(b[2]) << 16
-	i |= int32(b[3]) << 24
-	i2 |= int32(b[0])
-	i2 |= int32(b[1]) << 32
-	i2 |= int32(b[2]) << 40
-	i2 |= int32(b[3]) << 48
-	return
-}
+//func uint64ArrayToInt32Array(uis []uint64) (iA []int32) {
+//	iA = []int32{}
+//	for _, ui := range uis {
+//		i, i2 := uint64ToInt32(ui)
+//		iA = append(iA, i, i2)
+//	}
+//	return
+//}
+//
+//func uint64ToInt32(ui uint64) (i, i2 int32) {
+//	b := make([]byte, 8)
+//	binary.LittleEndian.PutUint64(b, uint64(ui))
+//	i |= int32(b[0])
+//	i |= int32(b[1]) << 8
+//	i |= int32(b[2]) << 16
+//	i |= int32(b[3]) << 24
+//	i2 |= int32(b[0])
+//	i2 |= int32(b[1]) << 32
+//	i2 |= int32(b[2]) << 40
+//	i2 |= int32(b[3]) << 48
+//	return
+//}
