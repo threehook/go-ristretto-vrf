@@ -2,7 +2,7 @@
 // of Curve25519, SHA3 and the Elligator2 map.
 //
 //     E is Curve25519 (in Edwards coordinates), h is SHA3.
-//     f is the elligator map (bytes->E) that covers half of E.
+//     f is the elligator map (value->E) that covers half of E.
 //     8 is the cofactor of E, the group order is 8*l for prime l.
 //     Setup : the prover publicly commits to a public key (P : E)
 //     H : names -> E
@@ -22,6 +22,11 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
+type VRF struct {
+	value [Size]byte
+	proof [ProofSize]byte
+}
+
 const (
 	PublicKeySize    = 32
 	SecretKeySize    = 64
@@ -30,11 +35,11 @@ const (
 	ProofSize        = 32 + 32 + intermediateSize
 )
 
-// GenerateKey creates a public/secret key pair.
-func GenerateKey() (*[PublicKeySize]byte, *[SecretKeySize]byte) {
+// GenerateKeys creates a public/secret key pair.
+func GenerateKeys() ([PublicKeySize]byte, [SecretKeySize]byte) {
 	var secretKey ristretto.Scalar
-	var pk = new([PublicKeySize]byte)
-	var sk = new([SecretKeySize]byte)
+	var pk [PublicKeySize]byte
+	var sk [SecretKeySize]byte
 	var digest [64]byte
 
 	secretKey.Rand() // Generate a new secret key
@@ -56,14 +61,14 @@ func GenerateKey() (*[PublicKeySize]byte, *[SecretKeySize]byte) {
 	hBytesScalar.SetBytes(&hBytes)
 
 	A.ScalarMultBase(&hBytesScalar) // compute public key
-	A.BytesInto(pk)
+	A.BytesInto(&pk)
 
 	copy(sk[32:], pk[:])
 	return pk, sk
 }
 
-func expandSecret(sk *[SecretKeySize]byte) (*[32]byte, *[32]byte) {
-	var x, skhr = new([32]byte), new([32]byte)
+func expandSecret(sk [SecretKeySize]byte) ([32]byte, [32]byte) {
+	var x, skhr [32]byte
 	hash := sha3.NewShake256()
 	hash.Write(sk[:32])
 	hash.Read(x[:])
@@ -74,23 +79,25 @@ func expandSecret(sk *[SecretKeySize]byte) (*[32]byte, *[32]byte) {
 	return x, skhr
 }
 
-func Compute(m []byte, sk *[SecretKeySize]byte) []byte {
+func NewVRF(m []byte, sk [SecretKeySize]byte) *VRF {
 	var ii ristretto.Point
 	var mScalar ristretto.Scalar
-	var iiB, vrf [Size]byte
+	var iiB, vrfBytes [Size]byte
 
 	x, _ := expandSecret(sk)
 	p := hashToCurve(m)
 
-	mScalar.SetBytes(x)
+	mScalar.SetBytes(&x)
 	ii.ScalarMult(p, &mScalar)
 	ii.BytesInto(&iiB)
 	hash := sha3.NewShake256()
 	hash.Write(iiB[:]) // const length: Size
 	hash.Write(m)
 
-	hash.Read(vrf[:])
-	return vrf[:]
+	hash.Read(vrfBytes[:])
+	var vrf = VRF{}
+	vrf.value = vrfBytes
+	return &vrf
 }
 
 // Prove returns the vrf value and a proof such that Verify(pk, d, vrf, proof) == true.
@@ -98,7 +105,7 @@ func Compute(m []byte, sk *[SecretKeySize]byte) []byte {
 //
 // Prove_x(d) = tuple(c=h(d, g^r, H(d)^r), t=r-c*x, ii=H(d)^x) where r = h(x, d) is used as a source of randomness
 // and x = secret key, d = data, c = encrypted composite of data and proof, t = encrypted c plus r and r = randomness
-func Prove(d []byte, sk *[SecretKeySize]byte) ([]byte, []byte) { // Return vrf, proof
+func (vrf *VRF) Prove(d []byte, sk [SecretKeySize]byte) [Size]byte { // Return vrf from proof
 	x, skhr := expandSecret(sk) // Create two separate 32 byte hashes from the secret key 64 byte hash
 	var cH, rH [SecretKeySize]byte
 	var r, c, minusC, t ristretto.Scalar
@@ -108,7 +115,7 @@ func Prove(d []byte, sk *[SecretKeySize]byte) ([]byte, []byte) { // Return vrf, 
 	dP := hashToCurve(d) // Curve point of data
 
 	var xSc ristretto.Scalar
-	xSc.SetBytes(x)
+	xSc.SetBytes(&x)
 	ii.ScalarMult(dP, &xSc) // ii=H(d)^x) where d = data and x = secret key
 	ii.BytesInto(&iiB)
 
@@ -138,7 +145,7 @@ func Prove(d []byte, sk *[SecretKeySize]byte) ([]byte, []byte) { // Return vrf, 
 	minusC.Neg(&c)
 	t.MulAdd(&xSc, &minusC, &r) // t=r-c*x
 
-	var proof = make([]byte, ProofSize)
+	var proof [ProofSize]byte
 	copy(proof[:32], c.Bytes())
 	copy(proof[32:64], t.Bytes())
 	copy(proof[64:96], iiB[:])
@@ -146,34 +153,37 @@ func Prove(d []byte, sk *[SecretKeySize]byte) ([]byte, []byte) { // Return vrf, 
 	// VRF_x(d) = h(d, H(d)^x)) where x = secret key and d = data
 	hash.Write(iiB[:])
 	hash.Write(d)
-	var vrf = make([]byte, Size)
-	hash.Read(vrf[:])
-	return vrf, proof
+
+	var vrfBytes [Size]byte
+	hash.Read(vrfBytes[:])
+	vrf.proof = proof
+	return vrfBytes
 }
 
 // Verify returns true if vrf=Compute(data, sk) for the sk that corresponds to pk.
 //
 // Check(P, d, vrf, (c,t,ii)) = vrf == h(d, ii) && c == h(d, g^t*pkP^c, H(d)^t*ii^c)
-func Verify(pkBytes, d, vrfBytes, proof []byte) bool {
-	var pk, iiB, vrf, ABytes, BBytes, hCheck [Size]byte
+func (vrf *VRF) Verify(pkBytes [PublicKeySize]byte, d []byte) bool {
+	var pk [PublicKeySize]byte
+	var iiB, vrfSlice, ABytes, BBytes, hCheck [Size]byte
 	var scZero, cRef, c, t ristretto.Scalar
 
-	if len(proof) != ProofSize || len(vrfBytes) != Size || len(pkBytes) != PublicKeySize {
+	if len(vrf.proof) != ProofSize || len(vrf.value) != Size || len(pkBytes) != PublicKeySize {
 		return false
 	}
 	scZero.SetZero() // Scalar zero
 
-	copy(vrf[:], vrfBytes)
-	copy(pk[:], pkBytes)
-	copy(c[:32], proof[:32])   // Retrieve c = h(d, g^t*P^c, H(d)^t*ii^c) = encrypted composite of data, proof and randomness
-	copy(t[:32], proof[32:64]) // Retrieve t = r-c = encrypted composite of data and proof
-	copy(iiB[:], proof[64:96]) // Retrieve ii = encrypted data
+	copy(vrfSlice[:], vrf.value[:])
+	copy(pk[:], pkBytes[:])
+	copy(c[:32], vrf.proof[:32])   // Retrieve c = h(d, g^t*P^c, H(d)^t*ii^c) = encrypted composite of data, proof and randomness
+	copy(t[:32], vrf.proof[32:64]) // Retrieve t = r-c = encrypted composite of data and proof
+	copy(iiB[:], vrf.proof[64:96]) // Retrieve ii = encrypted data
 
 	hash := sha3.NewShake256()
 	hash.Write(iiB[:])
 	hash.Write(d)
 	hash.Read(hCheck[:]) // hCheck is supposed to be vrf
-	if !bytes.Equal(hCheck[:], vrf[:]) {
+	if !bytes.Equal(hCheck[:], vrfSlice[:]) {
 		return false
 	}
 	hash.Reset()
